@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>AI Air Canvas</title>
+
+<style>
+
+body{
+margin:0;
+background:black;
+overflow:hidden;
+font-family:sans-serif;
+}
+
+/* webcam */
+
+#video{
+position:absolute;
+top:10px;
+right:10px;
+width:20%;
+border:3px solid white;
+border-radius:10px;
+z-index:5;
+transform:scaleX(-1);
+}
+
+/* drawing canvas */
+
+#drawCanvas{
+position:absolute;
+top:0;
+left:0;
+width:100vw;
+height:100vh;
+z-index:1;
+}
+
+/* hand overlay */
+
+#handCanvas{
+position:absolute;
+top:0;
+left:0;
+width:100vw;
+height:100vh;
+z-index:2;
+pointer-events:none;
+}
+
+/* toolbar */
+
+#toolbar{
+position:absolute;
+top:10px;
+left:10px;
+z-index:6;
+display:flex;
+gap:10px;
+}
+
+.color{
+width:30px;
+height:30px;
+border-radius:50%;
+cursor:pointer;
+border:2px solid white;
+}
+
+button{
+padding:6px 10px;
+font-size:14px;
+cursor:pointer;
+}
+
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+</head>
+
+<body>
+
+<div id="toolbar">
+
+<div class="color" style="background:red" onclick="setColor('red')"></div>
+<div class="color" style="background:blue" onclick="setColor('blue')"></div>
+<div class="color" style="background:green" onclick="setColor('green')"></div>
+<div class="color" style="background:yellow" onclick="setColor('yellow')"></div>
+<div class="color" style="background:white" onclick="setColor('white')"></div>
+
+<button onclick="undo()">Undo</button>
+<button onclick="redo()">Redo</button>
+<button onclick="saveImage()">Save</button>
+
+</div>
+
+<video id="video" autoplay></video>
+
+<canvas id="drawCanvas"></canvas>
+<canvas id="handCanvas"></canvas>
+
+<script>
+
+const video=document.getElementById("video");
+
+const drawCanvas=document.getElementById("drawCanvas");
+const drawCtx=drawCanvas.getContext("2d");
+
+const handCanvas=document.getElementById("handCanvas");
+const handCtx=handCanvas.getContext("2d");
+
+drawCanvas.width=window.innerWidth;
+drawCanvas.height=window.innerHeight;
+
+handCanvas.width=window.innerWidth;
+handCanvas.height=window.innerHeight;
+
+drawCtx.lineCap="round";
+drawCtx.lineJoin="round";
+
+/* drawing data */
+
+let prevX=null;
+let prevY=null;
+
+let currentColor="red";
+
+let strokes=[];
+let redoStack=[];
+let currentStroke=[];
+
+/* smoothing */
+
+let smoothX=0;
+let smoothY=0;
+const smoothing=0.7;
+
+/* toolbar */
+
+function setColor(color){
+currentColor=color;
+}
+
+function undo(){
+
+if(strokes.length===0) return;
+
+redoStack.push(strokes.pop());
+
+redraw();
+
+}
+
+function redo(){
+
+if(redoStack.length===0) return;
+
+strokes.push(redoStack.pop());
+
+redraw();
+
+}
+
+function redraw(){
+
+drawCtx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+
+strokes.forEach(stroke=>{
+
+drawCtx.strokeStyle=stroke.color;
+drawCtx.lineWidth=6;
+
+drawCtx.beginPath();
+
+for(let i=0;i<stroke.points.length;i++){
+
+let p=stroke.points[i];
+
+if(i===0) drawCtx.moveTo(p.x,p.y);
+else drawCtx.lineTo(p.x,p.y);
+
+}
+
+drawCtx.stroke();
+
+});
+
+}
+
+function saveImage(){
+
+let link=document.createElement("a");
+
+link.download="aircanvas.png";
+link.href=drawCanvas.toDataURL();
+
+link.click();
+
+}
+
+/* hand tracking */
+
+const hands=new Hands({
+
+locateFile:(file)=>{
+return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+}
+
+});
+
+hands.setOptions({
+
+maxNumHands:1,
+modelComplexity:1,
+minDetectionConfidence:0.7,
+minTrackingConfidence:0.7
+
+});
+
+/* finger detection */
+
+function fingersUp(lm){
+
+return [
+
+lm[4].x > lm[3].x,
+lm[8].y < lm[6].y,
+lm[12].y < lm[10].y,
+lm[16].y < lm[14].y,
+lm[20].y < lm[18].y
+
+];
+
+}
+
+/* skeleton */
+
+function drawHand(landmarks){
+
+const connections=[
+[0,1],[1,2],[2,3],[3,4],
+[0,5],[5,6],[6,7],[7,8],
+[5,9],[9,10],[10,11],[11,12],
+[9,13],[13,14],[14,15],[15,16],
+[13,17],[17,18],[18,19],[19,20],
+[0,17]
+];
+
+handCtx.strokeStyle="cyan";
+handCtx.lineWidth=2;
+
+connections.forEach(([a,b])=>{
+
+handCtx.beginPath();
+
+handCtx.moveTo(
+(1-landmarks[a].x)*handCanvas.width,
+landmarks[a].y*handCanvas.height
+);
+
+handCtx.lineTo(
+(1-landmarks[b].x)*handCanvas.width,
+landmarks[b].y*handCanvas.height
+);
+
+handCtx.stroke();
+
+});
+
+}
+
+/* results */
+
+hands.onResults(results=>{
+
+handCtx.clearRect(0,0,handCanvas.width,handCanvas.height);
+
+if(!results.multiHandLandmarks) return;
+
+for(const landmarks of results.multiHandLandmarks){
+
+drawHand(landmarks);
+
+let x=(1-landmarks[8].x)*drawCanvas.width;
+let y=landmarks[8].y*drawCanvas.height;
+
+/* smoothing */
+
+smoothX = smoothing*smoothX + (1-smoothing)*x;
+smoothY = smoothing*smoothY + (1-smoothing)*y;
+
+x=smoothX;
+y=smoothY;
+
+/* cursor */
+
+handCtx.beginPath();
+handCtx.arc(x,y,10,0,Math.PI*2);
+handCtx.fillStyle="lime";
+handCtx.fill();
+
+const fingers=fingersUp(landmarks);
+
+const index=fingers[1];
+const middle=fingers[2];
+const ring=fingers[3];
+const pinky=fingers[4];
+
+const openPalm=index && middle && ring && pinky;
+
+/* draw */
+
+if(index && !middle && !ring && !pinky){
+
+if(prevX && prevY){
+
+drawCtx.strokeStyle=currentColor;
+drawCtx.lineWidth=6;
+
+drawCtx.beginPath();
+drawCtx.moveTo(prevX,prevY);
+drawCtx.lineTo(x,y);
+drawCtx.stroke();
+
+}
+
+currentStroke.push({x,y});
+
+prevX=x;
+prevY=y;
+
+}
+
+/* erase */
+
+else if(openPalm){
+
+drawCtx.beginPath();
+drawCtx.arc(x,y,40,0,Math.PI*2);
+drawCtx.fillStyle="black";
+drawCtx.fill();
+
+prevX=null;
+prevY=null;
+
+}
+
+/* finish stroke */
+
+else{
+
+if(currentStroke.length>0){
+
+strokes.push({
+color:currentColor,
+points:[...currentStroke]
+});
+
+currentStroke=[];
+
+}
+
+prevX=null;
+prevY=null;
+
+}
+
+}
+
+});
+
+/* camera */
+
+const camera=new Camera(video,{
+
+onFrame: async ()=>{
+await hands.send({image:video});
+},
+
+width:640,
+height:480
+
+});
+
+camera.start();
+
+</script>
+
+</body>
+</html>
